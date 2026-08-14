@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Iov.OnvifSimulator/Iov.OnvifSimulator.csproj" />
+  </Folder>
+</Solution>

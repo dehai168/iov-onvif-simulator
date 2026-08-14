@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RootNamespace>Iov.OnvifSimulator</RootNamespace>
+    <AssemblyName>Iov.OnvifSimulator</AssemblyName>
+    <Description>WinForms ONVIF protocol simulator with local MP4/AVI streaming</Description>
+    <Authors>dehai168</Authors>
+    <Product>IOV ONVIF Simulator</Product>
+    <Version>1.0.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpOnvifServer" Version="0.9.5" />
+    <PackageReference Include="SharpOnvifServer.DeviceMgmt" Version="0.9.5" />
+    <PackageReference Include="SharpOnvifServer.Media" Version="0.9.5" />
+    <PackageReference Include="SharpRTSPServer" Version="0.7.0" />
+    <PackageReference Include="SharpMP4" Version="0.3.1" />
+    <PackageReference Include="SharpISOBMFF" Version="0.3.1" />
+  </ItemGroup>
+
+</Project>
