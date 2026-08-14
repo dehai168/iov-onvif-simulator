@@ -23,7 +23,7 @@ public sealed class MainForm : Form
     private readonly ListBox _mediaList;
     private readonly CheckBox _loopBox;
     private readonly ComboBox _orderBox;
-    private readonly Label _endpointLabel;
+    private readonly TextBox _endpointBox;
     private readonly TextBox _logBox;
     private readonly Button _startButton;
     private readonly Button _stopButton;
@@ -59,7 +59,7 @@ public sealed class MainForm : Form
         _editorPanel = CreateEditorPanel(
             out _nameBox, out _manufacturerBox, out _modelBox, out _serialBox, out _firmwareBox,
             out _httpPort, out _rtspPort, out _userBox, out _passwordBox, out _authBox,
-            out _mediaList, out _loopBox, out _orderBox, out _endpointLabel);
+            out _mediaList, out _loopBox, out _orderBox, out _endpointBox);
 
         _logBox = new TextBox
         {
@@ -165,7 +165,7 @@ public sealed class MainForm : Form
     private Panel CreateEditorPanel(
         out TextBox nameBox, out TextBox manufacturerBox, out TextBox modelBox, out TextBox serialBox, out TextBox firmwareBox,
         out NumericUpDown httpPort, out NumericUpDown rtspPort, out TextBox userBox, out TextBox passwordBox, out CheckBox authBox,
-        out ListBox mediaList, out CheckBox loopBox, out ComboBox orderBox, out Label endpointLabel)
+        out ListBox mediaList, out CheckBox loopBox, out ComboBox orderBox, out TextBox endpointBox)
     {
         var panel = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
         var layout = new TableLayoutPanel
@@ -229,17 +229,21 @@ public sealed class MainForm : Form
         playOptions.Controls.Add(new Label { Text = "播放顺序", AutoSize = true, Padding = new Padding(16, 6, 8, 0) });
         playOptions.Controls.Add(orderBox);
 
-        endpointLabel = new Label
+        endpointBox = new TextBox
         {
             Dock = DockStyle.Top,
-            Height = 70,
-            Padding = new Padding(8, 4, 8, 0),
-            Text = "ONVIF / RTSP 地址将在启动后显示。"
+            Height = 110,
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            Text = "将在全部网卡上监听 ONVIF / RTSP。"
         };
 
         BindEditorEvents();
 
-        panel.Controls.Add(endpointLabel);
+        panel.Controls.Add(endpointBox);
         panel.Controls.Add(playOptions);
         panel.Controls.Add(mediaGroup);
         panel.Controls.Add(layout);
@@ -586,14 +590,28 @@ public sealed class MainForm : Form
         var config = SelectedConfig;
         if (config == null)
         {
-            _endpointLabel.Text = string.Empty;
+            _endpointBox.Text = string.Empty;
             return;
         }
 
-        var ip = NetworkDefaults.GetPrimaryIPv4();
-        _endpointLabel.Text =
-            $"ONVIF: http://{ip}:{config.HttpPort}/onvif/device_service{Environment.NewLine}" +
-            $"RTSP:  rtsp://{ip}:{config.RtspPort}/stream";
+        var lines = new List<string> { "全部网卡监听地址:" };
+        var nics = NetworkDefaults.GetListenInterfaces();
+        if (nics.Count == 0)
+        {
+            var ip = NetworkDefaults.GetPrimaryIPv4();
+            lines.Add($"ONVIF: http://{ip}:{config.HttpPort}/onvif/device_service");
+            lines.Add($"RTSP:  rtsp://{ip}:{config.RtspPort}/stream");
+        }
+        else
+        {
+            foreach (var nic in nics)
+            {
+                lines.Add($"[{nic.Name}] http://{nic.IPv4}:{config.HttpPort}/onvif/device_service");
+                lines.Add($"[{nic.Name}] rtsp://{nic.IPv4}:{config.RtspPort}/stream");
+            }
+        }
+
+        _endpointBox.Text = string.Join(Environment.NewLine, lines);
     }
 
     private void Log(string message)

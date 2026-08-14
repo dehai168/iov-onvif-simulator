@@ -1,4 +1,5 @@
 using CoreWCF;
+using CoreWCF.Channels;
 using CoreWCF.Configuration;
 using CoreWCF.Description;
 using Iov.OnvifSimulator.Models;
@@ -11,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using SharpOnvifServer;
 using SharpOnvifServer.Discovery;
 using SharpOnvifServer.Security;
+using System.Net;
 
 namespace Iov.OnvifSimulator.Services;
 
@@ -26,14 +28,12 @@ public sealed class OnvifWebHost : IAsyncDisposable
         _log = log;
     }
 
-    public string DeviceServiceUri
-    {
-        get
-        {
-            var ip = NetworkDefaults.GetPrimaryIPv4();
-            return $"http://{ip}:{_config.HttpPort}/onvif/device_service";
-        }
-    }
+    public IReadOnlyList<string> DeviceServiceUris =>
+        NetworkDefaults.GetAllIPv4()
+            .Select(ip => $"http://{ip}:{_config.HttpPort}/onvif/device_service")
+            .ToList();
+
+    public string DeviceServiceUri => DeviceServiceUris[0];
 
     public async Task StartAsync()
     {
@@ -45,7 +45,10 @@ public sealed class OnvifWebHost : IAsyncDisposable
         });
 
         builder.Logging.ClearProviders();
-        builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(_config.HttpPort));
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.ListenAnyIP(_config.HttpPort);
+        });
 
         builder.Services.AddSingleton(_config);
         builder.Services.AddSingleton<IUserRepository, SimulatorUserRepository>();
@@ -55,6 +58,8 @@ public sealed class OnvifWebHost : IAsyncDisposable
         builder.Services.AddServiceModelServices();
         builder.Services.AddServiceModelMetadata();
         builder.Services.AddSingleton<IServiceBehavior, UseRequestHeadersForMetadataAddressBehavior>();
+        builder.Services.AddAuthentication();
+        builder.Services.AddAuthorization();
 
         if (_config.EnableAuthentication)
         {
@@ -65,20 +70,30 @@ public sealed class OnvifWebHost : IAsyncDisposable
 
         _app = builder.Build();
 
-        if (_config.EnableAuthentication)
-        {
-            _app.UseAuthentication();
-            _app.UseAuthorization();
-        }
-
+        _app.UseAuthentication();
+        _app.UseAuthorization();
         _app.UseOnvif();
 
-        _app.MapGet("/", () => Results.Text(
-            $"IOV ONVIF Simulator - {_config.Name}{Environment.NewLine}" +
-            $"Device: {DeviceServiceUri}{Environment.NewLine}" +
-            $"Media:  http://{NetworkDefaults.GetPrimaryIPv4()}:{_config.HttpPort}/onvif/media_service{Environment.NewLine}" +
-            $"RTSP:   rtsp://{NetworkDefaults.GetPrimaryIPv4()}:{_config.RtspPort}/stream{Environment.NewLine}",
-            "text/plain"));
+        _app.MapGet("/", () =>
+        {
+            var lines = new List<string>
+            {
+                $"IOV ONVIF Simulator - {_config.Name}",
+                "Listening on all network interfaces:"
+            };
+            foreach (var nic in NetworkDefaults.GetListenInterfaces())
+            {
+                lines.Add($"  [{nic.Name}] http://{nic.IPv4}:{_config.HttpPort}/onvif/device_service");
+                lines.Add($"  [{nic.Name}] rtsp://{nic.IPv4}:{_config.RtspPort}/stream");
+            }
+
+            if (lines.Count == 2)
+            {
+                lines.Add($"  Device: {DeviceServiceUri}");
+            }
+
+            return Results.Text(string.Join(Environment.NewLine, lines) + Environment.NewLine, "text/plain");
+        });
 
         _app.MapGet("/snapshot", () => Results.File(SnapshotImage.Create(_config), "image/jpeg"));
 
@@ -87,7 +102,7 @@ public sealed class OnvifWebHost : IAsyncDisposable
             var metadata = _app.Services.GetRequiredService<ServiceMetadataBehavior>();
             metadata.HttpGetEnabled = true;
 
-            var binding = OnvifBindingFactory.CreateBinding();
+            var binding = CreateBinding();
             serviceBuilder.AddService<SimulatorDeviceService>();
             serviceBuilder.AddServiceEndpoint<SimulatorDeviceService, SharpOnvifServer.DeviceMgmt.Device>(
                 binding, "/onvif/device_service");
@@ -98,7 +113,19 @@ public sealed class OnvifWebHost : IAsyncDisposable
         });
 
         await _app.StartAsync().ConfigureAwait(false);
-        _log($"ONVIF 已启动 {DeviceServiceUri}");
+        var nics = NetworkDefaults.GetListenInterfaces();
+        if (nics.Count == 0)
+        {
+            _log($"ONVIF 已启动 {DeviceServiceUri}");
+        }
+        else
+        {
+            _log($"ONVIF HTTP {_config.HttpPort} 已在 {nics.Count} 个网卡地址上监听:");
+            foreach (var nic in nics)
+            {
+                _log($"  [{nic.Name}] http://{nic.IPv4}:{_config.HttpPort}/onvif/device_service");
+            }
+        }
     }
 
     public async Task StopAsync()
@@ -121,17 +148,17 @@ public sealed class OnvifWebHost : IAsyncDisposable
 
     private OnvifDiscoveryOptions CreateDiscoveryOptions()
     {
-        var ip = NetworkDefaults.GetPrimaryIPv4();
+        var ipv4s = NetworkDefaults.GetAllIPv4();
         return new OnvifDiscoveryOptions
         {
             Name = _config.Name,
             Manufacturer = _config.Manufacturer,
             Hardware = _config.Model,
             MAC = _config.MacAddress,
-            ServiceAddresses =
-            [
-                $"http://{ip}:{_config.HttpPort}/onvif/device_service"
-            ],
+            NetworkInterfaces = [.. ipv4s, "0.0.0.0"],
+            ServiceAddresses = ipv4s
+                .Select(ip => $"http://{ip}:{_config.HttpPort}/onvif/device_service")
+                .ToList(),
             Scopes =
             [
                 "onvif://www.onvif.org/type/video_encoder",
@@ -145,6 +172,27 @@ public sealed class OnvifWebHost : IAsyncDisposable
                 new OnvifType("http://www.onvif.org/ver10/device/wsdl", "Device")
             ]
         };
+    }
+
+    private CustomBinding CreateBinding()
+    {
+        if (_config.EnableAuthentication)
+        {
+            return OnvifBindingFactory.CreateBinding();
+        }
+
+        const int maxMessageSize = 1048576;
+        return new CustomBinding(
+            new TextMessageEncodingBindingElement
+            {
+                MessageVersion = MessageVersion.CreateVersion(EnvelopeVersion.Soap12, AddressingVersion.None)
+            },
+            new HttpTransportBindingElement
+            {
+                AuthenticationScheme = AuthenticationSchemes.Anonymous,
+                MaxReceivedMessageSize = maxMessageSize,
+                MaxBufferSize = maxMessageSize
+            });
     }
 
     private DigestAuthenticationSchemeOptions CreateDigestOptions()

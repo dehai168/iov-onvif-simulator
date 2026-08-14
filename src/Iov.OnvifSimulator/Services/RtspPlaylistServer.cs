@@ -50,7 +50,19 @@ public sealed class RtspPlaylistServer : IAsyncDisposable
 
         _cts = new CancellationTokenSource();
         _playTask = Task.Run(() => PlayLoopAsync(_cts.Token));
-        _log($"RTSP 已监听 {StreamUri}");
+        var nics = NetworkDefaults.GetListenInterfaces();
+        if (nics.Count == 0)
+        {
+            _log($"RTSP 已监听 {StreamUri}");
+        }
+        else
+        {
+            _log($"RTSP {_config.RtspPort} 已在全部网卡监听:");
+            foreach (var nic in nics)
+            {
+                _log($"  [{nic.Name}] rtsp://{nic.IPv4}:{_config.RtspPort}/{StreamId}");
+            }
+        }
     }
 
     public async Task StopAsync()

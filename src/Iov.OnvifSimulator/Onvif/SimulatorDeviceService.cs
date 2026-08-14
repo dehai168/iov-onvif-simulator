@@ -122,37 +122,56 @@ public sealed class SimulatorDeviceService : DeviceBase
 
     public override GetNetworkInterfacesResponse GetNetworkInterfaces(GetNetworkInterfacesRequest request)
     {
+        var groups = NetworkDefaults.GetListenInterfaces()
+            .GroupBy(x => x.Id)
+            .ToList();
+
+        if (groups.Count == 0)
+        {
+            groups = NetworkDefaults.GetAllIPv4()
+                .Select(ip => new HostInterface("lo", "Loopback", ip, 8, _config.MacAddress))
+                .GroupBy(x => x.Id)
+                .ToList();
+        }
+
         return new GetNetworkInterfacesResponse
         {
-            NetworkInterfaces =
-            [
-                new NetworkInterface
-                {
-                    Enabled = true,
-                    Info = new NetworkInterfaceInfo
-                    {
-                        Name = "eth0",
-                        HwAddress = _config.MacAddress
-                    },
-                    IPv4 = new IPv4NetworkInterface
-                    {
-                        Enabled = true,
-                        Config = new IPv4Configuration
-                        {
-                            DHCP = false,
-                            Manual =
-                            [
-                                new PrefixedIPv4Address
-                                {
-                                    Address = NetworkDefaults.GetPrimaryIPv4(),
-                                    PrefixLength = 24
-                                }
-                            ]
-                        }
-                    }
-                }
-            ]
+            NetworkInterfaces = groups.Select(CreateOnvifInterface).ToArray()
         };
+    }
+
+    private SharpOnvifServer.DeviceMgmt.NetworkInterface CreateOnvifInterface(IGrouping<string, HostInterface> group)
+    {
+        var first = group.First();
+        return new SharpOnvifServer.DeviceMgmt.NetworkInterface
+        {
+            token = SanitizeToken(first.Id),
+            Enabled = true,
+            Info = new NetworkInterfaceInfo
+            {
+                Name = first.Name,
+                HwAddress = string.IsNullOrWhiteSpace(first.MacAddress) ? _config.MacAddress : first.MacAddress
+            },
+            IPv4 = new IPv4NetworkInterface
+            {
+                Enabled = true,
+                Config = new IPv4Configuration
+                {
+                    DHCP = false,
+                    Manual = group.Select(address => new PrefixedIPv4Address
+                    {
+                        Address = address.IPv4,
+                        PrefixLength = address.PrefixLength > 0 ? address.PrefixLength : 24
+                    }).ToArray()
+                }
+            }
+        };
+    }
+
+    private static string SanitizeToken(string value)
+    {
+        var token = new string(value.Where(char.IsLetterOrDigit).ToArray());
+        return string.IsNullOrEmpty(token) ? "eth0" : token;
     }
 
     public override GetNetworkProtocolsResponse GetNetworkProtocols(GetNetworkProtocolsRequest request)
