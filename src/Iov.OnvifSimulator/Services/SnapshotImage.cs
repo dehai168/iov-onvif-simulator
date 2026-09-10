@@ -8,7 +8,7 @@ public static class SnapshotImage
 {
     public static byte[] Create(SimulatorConfig config)
     {
-        using var bitmap = new Bitmap(1280, 720);
+        using var bitmap = new Bitmap(1920, 1080);
         using var graphics = Graphics.FromImage(bitmap);
         graphics.Clear(Color.FromArgb(24, 32, 48));
 

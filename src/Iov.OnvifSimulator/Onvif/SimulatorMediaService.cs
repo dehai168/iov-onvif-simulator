@@ -152,7 +152,7 @@ public sealed class SimulatorMediaService : MediaBase
         {
             token = VideoSourceToken,
             Framerate = 25,
-            Resolution = new VideoResolution { Width = 1280, Height = 720 }
+            Resolution = new VideoResolution { Width = 1920, Height = 1080 }
         };
     }
 
@@ -164,7 +164,7 @@ public sealed class SimulatorMediaService : MediaBase
             Name = VideoSourceToken,
             SourceToken = VideoSourceToken,
             UseCount = 1,
-            Bounds = new IntRectangle { x = 0, y = 0, width = 1280, height = 720 }
+            Bounds = new IntRectangle { x = 0, y = 0, width = 1920, height = 1080 }
         };
     }
 
@@ -177,7 +177,7 @@ public sealed class SimulatorMediaService : MediaBase
             UseCount = 1,
             Encoding = VideoEncoding.H264,
             Quality = 5,
-            Resolution = new VideoResolution { Width = 1280, Height = 720 },
+            Resolution = new VideoResolution { Width = 1920, Height = 1080 },
             RateControl = new VideoRateControl
             {
                 FrameRateLimit = 25,
