@@ -139,10 +139,13 @@ public sealed class RtspPlaylistServer : IAsyncDisposable
         {
             var ffmpeg = FfmpegLocator.Find()
                 ?? throw new InvalidOperationException("播放 AVI 或转码需要 FFmpeg，请安装并加入 PATH。");
-            using var process = AnnexBNalReader.StartFfmpeg(ffmpeg, file, realtime: true);
+            var fps = FfmpegLocator.TryProbeFrameRate(file) ?? 25;
+            _log($"FFmpeg 推流按源帧率 {fps:0.##} fps");
+            using var process = AnnexBNalReader.StartFfmpeg(ffmpeg, file, realtime: true, fps);
             try
             {
-                await AnnexBNalReader.PumpToTrackAsync(process.StandardOutput.BaseStream, h264, _rtpBaseTime, cancellationToken)
+                _rtpBaseTime = await AnnexBNalReader
+                    .PumpToTrackAsync(process.StandardOutput.BaseStream, h264, _rtpBaseTime, fps, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -155,7 +158,9 @@ public sealed class RtspPlaylistServer : IAsyncDisposable
 
         if (Mp4MediaReader.IsMp4Family(file) && _videoTrack != null)
         {
-            await Mp4MediaReader.PlayAsync(file, _videoTrack, _rtpBaseTime, cancellationToken).ConfigureAwait(false);
+            _rtpBaseTime = await Mp4MediaReader
+                .PlayAsync(file, _videoTrack, _rtpBaseTime, _log, cancellationToken)
+                .ConfigureAwait(false);
             return;
         }
 
@@ -184,7 +189,8 @@ public sealed class RtspPlaylistServer : IAsyncDisposable
                 "无法解析该视频文件。请使用 H264/H265 的 MP4，或安装 FFmpeg 以支持 AVI 及其他编码。");
         }
 
-        using var process = AnnexBNalReader.StartFfmpeg(ffmpeg, firstFile, realtime: false);
+        var fps = FfmpegLocator.TryProbeFrameRate(firstFile) ?? 25;
+        using var process = AnnexBNalReader.StartFfmpeg(ffmpeg, firstFile, realtime: false, fps);
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
