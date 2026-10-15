@@ -1,10 +1,14 @@
 using System.Diagnostics;
+using System.Globalization;
 using SharpRTSPServer;
 
 namespace Iov.OnvifSimulator.Services;
 
 internal static class AnnexBNalReader
 {
+    private const uint RtpClock = 90000;
+    private const double DefaultFps = 25;
+
     public static async Task<(byte[] Sps, byte[] Pps)> WaitForParameterSetsAsync(Stream stream, CancellationToken cancellationToken)
     {
         byte[]? sps = null;
@@ -80,15 +84,26 @@ internal static class AnnexBNalReader
         }
     }
 
-    public static async Task PumpToTrackAsync(
+    /// <summary>
+    /// Pumps Annex-B NALs using a fixed RTP step derived from the source fps.
+    /// FFmpeg -re already paces the pipe; timestamps must follow source frame rate.
+    /// </summary>
+    public static async Task<uint> PumpToTrackAsync(
         Stream stream,
         H264Track track,
         uint rtpBaseTime,
+        double frameRate,
         CancellationToken cancellationToken)
     {
-        uint timestamp = rtpBaseTime;
-        const uint step = 3600;
+        if (frameRate < 0.5 || frameRate > 120)
+        {
+            frameRate = DefaultFps;
+        }
+
+        var step = (uint)Math.Max(1, Math.Round(RtpClock / frameRate));
         var accessUnit = new List<byte[]>();
+        uint timestamp = rtpBaseTime;
+        var fedAny = false;
 
         await foreach (var nal in ReadNalsAsync(stream, cancellationToken).ConfigureAwait(false))
         {
@@ -102,14 +117,26 @@ internal static class AnnexBNalReader
             track.FeedInRawSamples(timestamp, accessUnit.Select(x => (ReadOnlyMemory<byte>)x).ToList());
             accessUnit.Clear();
             timestamp = unchecked(timestamp + step);
+            fedAny = true;
         }
+
+        return fedAny ? timestamp : rtpBaseTime;
     }
 
-    public static Process StartFfmpeg(string ffmpegPath, string inputFile, bool realtime)
+    public static Process StartFfmpeg(string ffmpegPath, string inputFile, bool realtime, double frameRate)
     {
+        if (frameRate < 0.5 || frameRate > 120)
+        {
+            frameRate = DefaultFps;
+        }
+
+        var fpsText = frameRate.ToString("0.###", CultureInfo.InvariantCulture);
+        var gop = Math.Max(1, (int)Math.Round(frameRate));
         var re = realtime ? "-re " : string.Empty;
+        // Keep source frame rate: -r on output + fps_mode cfr avoids encoder inventing a different rate.
         var args =
-            $"-hide_banner -loglevel error {re}-i \"{inputFile}\" -an -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -pix_fmt yuv420p -g 25 -f h264 pipe:1";
+            $"-hide_banner -loglevel error {re}-i \"{inputFile}\" -an -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 " +
+            $"-pix_fmt yuv420p -r {fpsText} -g {gop} -keyint_min {gop} -f h264 pipe:1";
 
         var startInfo = new ProcessStartInfo
         {
