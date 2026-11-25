@@ -36,7 +36,7 @@ public sealed class MainForm : Form
     {
         _config = _store.Load();
 
-        Text = "IOV ONVIF 协议模拟器";
+        Text = $"IOV ONVIF 协议模拟器 {AppVersion.Display}";
         Width = 1120;
         Height = 760;
         MinimumSize = new Size(980, 640);
