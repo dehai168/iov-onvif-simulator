@@ -104,10 +104,8 @@ internal static class Mp4MediaReader
         }
 
         var sttsFps = TrySttsFps(videoTrack, sourceTimescale);
-        var tableFps = TryMeasureFpsFromSamples(reader, videoTrack.TrackID, sourceTimescale);
-        // Rewind after measurement.
-        RewindTrack(reader, videoTrack.TrackID);
-
+        // Probe FPS on a separate reader so the play cursor stays at the start.
+        var tableFps = TryMeasureFpsFromFile(path, sourceTimescale);
         var probedFps = FfmpegLocator.TryProbeFrameRate(path);
         var fps = PickFrameRate(probedFps, tableFps, sttsFps);
         var frameSeconds = 1.0 / fps;
@@ -123,15 +121,33 @@ internal static class Mp4MediaReader
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var sample = reader.ReadSample(videoTrack.TrackID);
+            MediaSample? sample;
+            try
+            {
+                sample = reader.ReadSample(videoTrack.TrackID);
+            }
+            catch (Exception ex) when (IsEndOfMedia(ex))
+            {
+                // Some MP4s throw instead of returning null on the last sample.
+                break;
+            }
+
             if (sample == null)
             {
                 break;
             }
 
-            var units = reader.ParseSample(videoTrack.TrackID, sample.Data)
-                .Select(static u => (ReadOnlyMemory<byte>)u.ToArray())
-                .ToList();
+            List<ReadOnlyMemory<byte>> units;
+            try
+            {
+                units = reader.ParseSample(videoTrack.TrackID, sample.Data)
+                    .Select(static u => (ReadOnlyMemory<byte>)u.ToArray())
+                    .ToList();
+            }
+            catch (Exception ex) when (IsEndOfMedia(ex))
+            {
+                break;
+            }
 
             // Pace by real fps: container DefaultSampleDuration is unreliable on many recorder MP4s.
             var dueAt = frameIndex * frameSeconds - PacingLeadSeconds;
@@ -163,6 +179,17 @@ internal static class Mp4MediaReader
         }
 
         return unchecked(rtpBaseTime + (uint)lastRtpPts + (uint)Math.Round(rtpStep));
+    }
+
+    private static bool IsEndOfMedia(Exception ex)
+    {
+        if (ex is EndOfStreamException or IOException)
+        {
+            return true;
+        }
+
+        return ex.Message.Contains("past the end of the stream", StringComparison.OrdinalIgnoreCase)
+               || ex.Message.Contains("end of the stream", StringComparison.OrdinalIgnoreCase);
     }
 
     private static double PickFrameRate(double? probed, double? table, double? stts)
@@ -204,64 +231,82 @@ internal static class Mp4MediaReader
     }
 
     /// <summary>
-    /// Reads a prefix of the track and derives fps from median DTS deltas.
+    /// Opens the file independently so FPS probing cannot leave the play reader at EOF.
     /// </summary>
-    private static double? TryMeasureFpsFromSamples(VideoReader reader, uint trackId, uint timescale)
+    private static double? TryMeasureFpsFromFile(string path, uint timescale)
     {
         if (timescale == 0)
         {
             return null;
         }
 
-        const int maxSamples = 120;
-        long? prevDts = null;
-        var deltas = new List<long>(maxSamples);
-
-        for (var i = 0; i < maxSamples; i++)
+        try
         {
-            var sample = reader.ReadSample(trackId);
-            if (sample == null)
+            using var input = new BufferedStream(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read));
+            var iso = new IsoStream(input);
+            var container = new Container();
+            container.Read(iso);
+
+            var reader = new VideoReader();
+            reader.Parse(container);
+            var videoTrack = reader.GetTracks().FirstOrDefault(t => t.HandlerType == HandlerTypes.Video);
+            if (videoTrack == null)
             {
-                break;
+                return null;
             }
 
-            if (prevDts is long prev)
+            const int maxSamples = 120;
+            long? prevDts = null;
+            var deltas = new List<long>(maxSamples);
+
+            for (var i = 0; i < maxSamples; i++)
             {
-                var delta = sample.DTS - prev;
-                if (delta > 0)
+                MediaSample? sample;
+                try
                 {
-                    deltas.Add(delta);
+                    sample = reader.ReadSample(videoTrack.TrackID);
                 }
+                catch (Exception ex) when (IsEndOfMedia(ex))
+                {
+                    break;
+                }
+
+                if (sample == null)
+                {
+                    break;
+                }
+
+                if (prevDts is long prev)
+                {
+                    var delta = sample.DTS - prev;
+                    if (delta > 0)
+                    {
+                        deltas.Add(delta);
+                    }
+                }
+
+                prevDts = sample.DTS;
             }
 
-            prevDts = sample.DTS;
-        }
+            if (deltas.Count < 5)
+            {
+                return null;
+            }
 
-        if (deltas.Count < 5)
+            deltas.Sort();
+            var median = deltas[deltas.Count / 2];
+            if (median <= 0)
+            {
+                return null;
+            }
+
+            var fps = timescale / (double)median;
+            return fps is > 0.5 and < 120 ? fps : null;
+        }
+        catch
         {
             return null;
         }
-
-        deltas.Sort();
-        var median = deltas[deltas.Count / 2];
-        if (median <= 0)
-        {
-            return null;
-        }
-
-        var fps = timescale / (double)median;
-        return fps is > 0.5 and < 120 ? fps : null;
-    }
-
-    private static void RewindTrack(VideoReader reader, uint trackId)
-    {
-        if (!reader.Tracks.TryGetValue(trackId, out var context))
-        {
-            return;
-        }
-
-        context.SampleIndex = 0;
-        context.FragmentIndex = 0;
     }
 
     private static uint GetMediaTimescale(Container container, uint trackId)

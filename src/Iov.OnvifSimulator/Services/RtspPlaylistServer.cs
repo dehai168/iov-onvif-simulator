@@ -119,7 +119,19 @@ public sealed class RtspPlaylistServer : IAsyncDisposable
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     _log($"开始推流: {Path.GetFileName(file)}");
-                    await PlayFileAsync(file, cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await PlayFileAsync(file, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex) when (_config.LoopPlayback)
+                    {
+                        // One file ending with a parser EOS error must not kill the loop.
+                        _log($"单次推流结束({Path.GetFileName(file)}): {ex.Message}，准备循环下一次。");
+                    }
                 }
             }
             while (_config.LoopPlayback && !cancellationToken.IsCancellationRequested);
